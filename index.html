@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@latest/ol.css">
+  <link rel="stylesheet" href="styles.css">
+
+  <script src="https://unpkg.com/h3-js@^4.1.0/dist/h3-js.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ol@latest/dist/ol.js"></script>
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol-layerswitcher@4.1.1/dist/ol-layerswitcher.css" />
+</head>
+
+<body>
+  <div id="map"></div>
+  <div id="mapMessage" class="map-message hidden"></div>
+  <div id="controls">
+    <div class="panel-title">Параметры</div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="netatmo" id="tabBtnNetatmo">Netatmo</button>
+      <button class="tab-btn" data-tab="sensor" id="tabBtnSensor">sensor.community</button>
+    </div>
+
+  <div class="tab-panel active" id="panel-netatmo">
+  <div class="group">
+    <div class="row row-3">
+      <label>
+        <span>День</span>
+        <select id="netatmoDaySelect">
+          <option value="">Все дни</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+          <option value="6">6</option>
+          <option value="7">7</option>
+          <option value="8">8</option>
+          <option value="9">9</option>
+          <option value="10">10</option>
+          <option value="11">11</option>
+          <option value="12">12</option>
+          <option value="13">13</option>
+          <option value="14">14</option>
+          <option value="15">15</option>
+          <option value="16">16</option>
+          <option value="17">17</option>
+          <option value="18">18</option>
+          <option value="19">19</option>
+          <option value="20">20</option>
+          <option value="21">21</option>
+          <option value="22">22</option>
+          <option value="23">23</option>
+          <option value="24">24</option>
+          <option value="25">25</option>
+          <option value="26">26</option>
+          <option value="27">27</option>
+          <option value="28">28</option>
+          <option value="29">29</option>
+          <option value="30">30</option>
+          <option value="31">31</option>
+        </select>
+      </label>
+
+      <label>
+        <span>Месяц</span>
+        <select id="netatmoMonthSelect">
+          <option value="1">Январь</option>
+          <option value="2">Февраль</option>
+          <option value="3">Март</option>
+          <option value="4">Апрель</option>
+          <option value="5">Май</option>
+          <option value="6">Июнь</option>
+          <option value="7">Июль</option>
+          <option value="8">Август</option>
+          <option value="9">Сентябрь</option>
+          <option value="10">Октябрь</option>
+          <option value="11">Ноябрь</option>
+          <option value="12">Декабрь</option>
+        </select>
+      </label>
+
+      <label>
+        <span>Год</span>
+        <select id="netatmoYearInput">
+          <option value="2019" selected>2019</option>
+          <option value="2020">2020</option>
+          <option value="2021">2021</option>
+          <option value="2022">2022</option>
+          <option value="2023">2023</option>
+          <option value="2024">2024</option>
+          <option value="2025">2025</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="row">
+      <label>
+        <span>Уровень валидации</span>
+        <select id="netatmoDataValSelect">
+          <option value="">Без валидации</option>
+          <option value="1">Уровень 1</option>
+          <option value="2">Уровень 2</option>
+          <option value="3">Уровень 3</option>
+          <option value="4">Уровень 4</option>
+        </select>
+      </label>
+
+      <label>
+        <span>Час</span>
+        <select id="netatmoHourSelect" disabled>
+          <option value="">Все время</option>
+          <option value="0">00:00</option>
+          <option value="1">01:00</option>
+          <option value="2">02:00</option>
+          <option value="3">03:00</option>
+          <option value="4">04:00</option>
+          <option value="5">05:00</option>
+          <option value="6">06:00</option>
+          <option value="7">07:00</option>
+          <option value="8">08:00</option>
+          <option value="9">09:00</option>
+          <option value="10">10:00</option>
+          <option value="11">11:00</option>
+          <option value="12">12:00</option>
+          <option value="13">13:00</option>
+          <option value="14">14:00</option>
+          <option value="15">15:00</option>
+          <option value="16">16:00</option>
+          <option value="17">17:00</option>
+          <option value="18">18:00</option>
+          <option value="19">19:00</option>
+          <option value="20">20:00</option>
+          <option value="21">21:00</option>
+          <option value="22">22:00</option>
+          <option value="23">23:00</option>
+        </select>
+      </label>
+    </div>
+
+      <label class="inline">
+        <span>Фиксировать разрешение</span>
+        <input type="checkbox" id="netatmoLockResolution">
+      </label>
+
+      <label>
+        <select id="netatmoResolutionSelect" disabled>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5" selected>5</option>
+          <option value="6">6</option>
+          <option value="7">7</option>
+          <option value="8">8</option>
+          <option value="9">9</option>
+        </select>
+      </label>
+
+      <label class="inline">
+        <span>Показать станции</span>
+        <input type="checkbox" id="netatmoToggleStations" checked>
+      </label>
+
+      <label class="inline">
+        <span>Показать сетку</span>
+        <input type="checkbox" id="netatmoToggleHex" checked>
+      </label>
+
+      <label class="inline">
+        <span>Подключить sensor.community</span>
+        <input type="checkbox" id="netatmoIncludeSensor">
+      </label>
+
+      <button id="netatmoUpdateBtn">Обновить</button>
+    </div>
+
+    <div class="group legend-group">
+      <div class="legend-title">Температура, °C</div>
+      <div class="legend-items" id="netatmoLegend"></div>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="panel-sensor">
+    <div class="group">
+      <div class="row row-3">
+        <label>
+          <span>День</span>
+          <select id="sensorDaySelect">
+            <option value="">Все дни</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10</option>
+            <option value="11">11</option>
+            <option value="12">12</option>
+            <option value="13">13</option>
+            <option value="14">14</option>
+            <option value="15">15</option>
+            <option value="16">16</option>
+            <option value="17">17</option>
+            <option value="18">18</option>
+            <option value="19">19</option>
+            <option value="20">20</option>
+            <option value="21">21</option>
+            <option value="22">22</option>
+            <option value="23">23</option>
+            <option value="24">24</option>
+            <option value="25">25</option>
+            <option value="26">26</option>
+            <option value="27">27</option>
+            <option value="28">28</option>
+            <option value="29">29</option>
+            <option value="30">30</option>
+            <option value="31">31</option>
+          </select>
+        </label>
+
+        <label>
+          <span>Месяц</span>
+          <select id="sensorMonthSelect">
+            <option value="1">Январь</option>
+            <option value="2">Февраль</option>
+          </select>
+        </label>
+
+        <label>
+          <span>Год</span>
+          <select id="sensorYearInput">
+            <option value="2025" selected>2025</option>
+          </select>
+        </label>
+      </div>
+
+      <label>
+        <span>Час</span>
+        <select id="sensorHourSelect" disabled>
+          <option value="">Все время</option>
+          <option value="0">00:00</option>
+          <option value="1">01:00</option>
+          <option value="2">02:00</option>
+          <option value="3">03:00</option>
+          <option value="4">04:00</option>
+          <option value="5">05:00</option>
+          <option value="6">06:00</option>
+          <option value="7">07:00</option>
+          <option value="8">08:00</option>
+          <option value="9">09:00</option>
+          <option value="10">10:00</option>
+          <option value="11">11:00</option>
+          <option value="12">12:00</option>
+          <option value="13">13:00</option>
+          <option value="14">14:00</option>
+          <option value="15">15:00</option>
+          <option value="16">16:00</option>
+          <option value="17">17:00</option>
+          <option value="18">18:00</option>
+          <option value="19">19:00</option>
+          <option value="20">20:00</option>
+          <option value="21">21:00</option>
+          <option value="22">22:00</option>
+          <option value="23">23:00</option>
+        </select>
+      </label>
+
+      <label class="inline">
+        <span>Фиксировать разрешение</span>
+        <input type="checkbox" id="sensorLockResolution">
+      </label>
+
+      <label>
+        <select id="sensorResolutionSelect" disabled>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5" selected>5</option>
+          <option value="6">6</option>
+          <option value="7">7</option>
+          <option value="8">8</option>
+          <option value="9">9</option>
+        </select>
+      </label>
+
+      <label class="inline">
+        <span>Показать станции</span>
+        <input type="checkbox" id="sensorToggleStations" checked>
+      </label>
+
+      <label class="inline">
+        <span>Показать сетку</span>
+        <input type="checkbox" id="sensorToggleHex" checked>
+      </label>
+
+      <label class="inline">
+        <span>Подключить Netatmo</span>
+        <input type="checkbox" id="sensorIncludeNetatmo">
+      </label>
+
+      <button id="sensorUpdateBtn">Обновить</button>
+    </div>
+
+    <div class="group legend-group">
+      <div class="legend-title">Температура, °C</div>
+      <div class="legend-items" id="sensorLegend"></div>
+    </div>
+  </div>
+
+  <div id="popup" class="ol-popup">
+    <a href="#" id="popup-closer" class="ol-popup-closer"></a>
+    <div id="popup-content"></div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/ol-layerswitcher@4.1.1"></script>
+
+  <script src="main.js"></script>
+</body>
+</html>
