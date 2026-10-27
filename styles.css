@@ -29,6 +29,7 @@ html, body {
   position: absolute;
   top: 16px;
   left: 16px;
+  bottom: 16px;
   z-index: 1000;
   width: var(--panel-w);
   padding: 14px;
@@ -40,6 +41,8 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: var(--gap);
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
 }
 
 .panel-title {
@@ -54,6 +57,7 @@ html, body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+  scroll-snap-align: start;
 }
 
 .tab-btn {
@@ -198,7 +202,7 @@ button[id$="UpdateBtn"]:active {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  max-height: 190px;
+  max-height: 125px;
   overflow-y: auto;
   padding-right: 4px;
 }
