@@ -1,4 +1,5 @@
 const API_BASE_URL = "http://localhost:8000/api";
+let CURRENT_PARAMETER = "temperature";
 const osmSource = new ol.source.OSM();
 
 const state = {
@@ -20,6 +21,7 @@ const state = {
     month: 1,
     year: 2025,
     hour: null,
+    dataVal: "1",
     locked: false,
     manualResolution: 5,
     showStations: true,
@@ -31,8 +33,7 @@ const state = {
 let currentZoom = 9;
 let zoomUpdateTimeout = null;
 let previouslySelectedFeature = null;
-let stationsCache = null;
-let sensorStationsCache = null;
+let renderVersion = 0;
 
 const tabBtnNetatmo = document.getElementById("tabBtnNetatmo");
 const tabBtnSensor = document.getElementById("tabBtnSensor");
@@ -48,6 +49,7 @@ const netatmoToggleHex = document.getElementById("netatmoToggleHex");
 const netatmoIncludeSensor = document.getElementById("netatmoIncludeSensor");
 const netatmoUpdateBtn = document.getElementById("netatmoUpdateBtn");
 
+const sensorDataValSelect = document.getElementById("sensorDataValSelect");
 const sensorLockResolution = document.getElementById("sensorLockResolution");
 const sensorResolutionSelect = document.getElementById("sensorResolutionSelect");
 const sensorToggleHex = document.getElementById("sensorToggleHex");
@@ -62,6 +64,8 @@ const sensorHourSelect = document.getElementById("sensorHourSelect");
 const netatmoLegend = document.getElementById("netatmoLegend");
 const sensorLegend = document.getElementById("sensorLegend");
 const sensorToggleStations = document.getElementById("sensorToggleStations");
+const netatmoLegendTitle = document.getElementById("netatmoLegendTitle");
+const sensorLegendTitle = document.getElementById("sensorLegendTitle");
 
 const container = document.getElementById("popup");
 const content = document.getElementById("popup-content");
@@ -71,24 +75,42 @@ const netatmoDaySelect = document.getElementById("netatmoDaySelect");
 const netatmoYearInput = document.getElementById("netatmoYearInput");
 const netatmoHourSelect = document.getElementById("netatmoHourSelect");
 
+const parameterSelect = document.getElementById("parameterSelect");
+
 const hexGeometryCache = new Map();
 const hexStyleCache = new Map();
 
-const NEGATIVE_TEMP_PALETTE = [
-  [33, 102, 172],    
+const TEMPERATURE_NEGATIVE_PALETTE = [
+  [33, 102, 172],
   [67, 147, 195],
   [146, 197, 222],
-  [209, 229, 240],  
+  [209, 229, 240],
 ];
 
-const POSITIVE_TEMP_PALETTE = [
-  [253, 219, 199],   
+const TEMPERATURE_POSITIVE_PALETTE = [
+  [253, 219, 199],
   [244, 165, 130],
   [214, 96, 77],
-  [178, 24, 43],    
+  [178, 24, 43],
 ];
 
-const ZERO_TEMP_COLOR = [245, 245, 245];
+const TEMPERATURE_ZERO_COLOR = [245, 245, 245];
+
+const HUMIDITY_PALETTE = [
+  [255, 245, 157],
+  [220, 237, 200],
+  [165, 214, 167],
+  [102, 187, 106],
+  [46, 125, 50],
+];
+
+const PRESSURE_PALETTE = [
+  [237, 231, 246],
+  [206, 147, 216],
+  [171, 71, 188],
+  [236, 64, 122],
+  [173, 20, 87],
+];
 
 function interpolateColor(c1, c2, t) {
   return [
@@ -113,24 +135,38 @@ function getColorFromPalette(palette, t) {
   return interpolateColor(palette[left], palette[right], localT);
 }
 
-function getColorForTemperatureBin(min, max, domainMin, domainMax) {
+function getColorForValueBin(min, max, domainMin, domainMax, parameter = CURRENT_PARAMETER) {
   const mid = (min + max) / 2;
 
-  if (max <= 0) {
-    const coldMin = Math.min(domainMin, -0.1);
-    const t = (mid - coldMin) / (0 - coldMin);
+  if (parameter === "temperature") {
+    if (max <= 0) {
+      const coldMin = Math.min(domainMin, -0.1);
+      const t = (mid - coldMin) / (0 - coldMin);
+      return getColorFromPalette(TEMPERATURE_NEGATIVE_PALETTE, t);
+    }
 
-    return getColorFromPalette(NEGATIVE_TEMP_PALETTE, t);
+    if (min >= 0) {
+      const warmMax = Math.max(domainMax, 0.1);
+      const t = mid / warmMax;
+      return getColorFromPalette(TEMPERATURE_POSITIVE_PALETTE, t);
+    }
+
+    return TEMPERATURE_ZERO_COLOR;
   }
 
-  if (min >= 0) {
-    const warmMax = Math.max(domainMax, 0.1);
-    const t = mid / warmMax;
-
-    return getColorFromPalette(POSITIVE_TEMP_PALETTE, t);
+  if (parameter === "humidity") {
+    const range = Math.max(domainMax - domainMin, 0.1);
+    const t = (mid - domainMin) / range;
+    return getColorFromPalette(HUMIDITY_PALETTE, t);
   }
 
-  return ZERO_TEMP_COLOR;
+  if (parameter === "pressure") {
+    const range = Math.max(domainMax - domainMin, 0.1);
+    const t = (mid - domainMin) / range;
+    return getColorFromPalette(PRESSURE_PALETTE, t);
+  }
+
+  return [160, 160, 160];
 }
 
 function roundDown(value, step) {
@@ -156,7 +192,7 @@ function formatTemp(value) {
 function getStepByResolution(resolution) {
   if (resolution >= 8) return 1.5;
   if (resolution >= 6) return 3;
-  if (resolution >= 6) return 5;
+  if (resolution >= 4) return 5;
   return 10;
 }
 
@@ -168,22 +204,54 @@ function isWarmMonth(month) {
   return [5, 6, 7, 8, 9].includes(Number(month));
 }
 
-function getTemperaturesFromGeojsonList(geojsonList) {
-  const temps = [];
+function updateValidationUiState() {
+  const isTemperature = CURRENT_PARAMETER === "temperature";
+
+  netatmoDataValSelect.disabled = !isTemperature;
+  sensorDataValSelect.disabled = !isTemperature;
+
+  if (!isTemperature) {
+    netatmoDataValSelect.value = "";
+    state.netatmo.dataVal = null;
+    sensorDataValSelect.value = "1";
+    state.sensor.dataVal = "1";
+  }
+}
+
+function updateLegendTitles() {
+  const legendTitleMap = {
+    temperature: "Температура, °C",
+    pressure: "Давление, гПа",
+    humidity: "Относительная влажность, %",
+  };
+
+  const title = legendTitleMap[CURRENT_PARAMETER] || "Значение";
+
+  if (netatmoLegendTitle) {
+    netatmoLegendTitle.textContent = title;
+  }
+
+  if (sensorLegendTitle) {
+    sensorLegendTitle.textContent = title;
+  }
+}
+
+function getValuesFromGeojsonList(geojsonList) {
+  const values = [];
 
   for (const geojson of geojsonList) {
     if (!geojson || !Array.isArray(geojson.features)) continue;
 
     for (const feature of geojson.features) {
-      const value = Number(feature?.properties?.avg_temperature);
+      const value = Number(feature?.properties?.avg_value);
 
       if (Number.isFinite(value)) {
-        temps.push(value);
+        values.push(value);
       }
     }
   }
 
-  return temps;
+  return values;
 }
 
 function quantile(sortedValues, q) {
@@ -201,29 +269,37 @@ function quantile(sortedValues, q) {
 }
 
 function buildTemperatureScale(geojsonList, month, resolution) {
-  const temps = getTemperaturesFromGeojsonList(geojsonList).sort((a, b) => a - b);
+  const values = getValuesFromGeojsonList(geojsonList).sort((a, b) => a - b);
 
-  if (!temps.length) {
+  if (!values.length) {
     return activeTemperatureScale;
   }
 
   const step = getStepByResolution(resolution);
 
-  const q05 = quantile(temps, 0.05);
-  const q95 = quantile(temps, 0.95);
+  const q05 = quantile(values, 0.05);
+  const q95 = quantile(values, 0.95);
 
   let minValue = q05 - step;
   let maxValue = q95 + step;
 
-  if (isColdMonth(month)) {
-    if (q95 <= 0) {
-      maxValue = 0;
-    } else if (q95 <= 5) {
-      maxValue = 0;
+  if (CURRENT_PARAMETER === "temperature") {
+    if (isColdMonth(month)) {
+      if (q95 <= 0) {
+        maxValue = 0;
+      } else if (q95 <= 5) {
+        maxValue = 0;
+      }
+    }
+
+    if (isWarmMonth(month) && q05 >= 0) {
+      minValue = 0;
     }
   }
-  if (isWarmMonth(month) && q05 >= 0) {
-    minValue = 0;
+
+  if (CURRENT_PARAMETER === "humidity") {
+    minValue = Math.max(0, minValue);
+    maxValue = Math.min(100, maxValue);
   }
 
   let domainMin = roundDown(minValue, step);
@@ -243,12 +319,12 @@ function buildTemperatureScale(geojsonList, month, resolution) {
       min: start,
       max: end,
       label: `${formatTemp(start)} – ${formatTemp(end)}`,
-      color: getColorForTemperatureBin(start, end, domainMin, domainMax),
+      color: getColorForValueBin(start, end, domainMin, domainMax, CURRENT_PARAMETER),
     });
   }
 
   return {
-    id: `${domainMin}_${domainMax}_${step}_${month}_${resolution}`,
+    id: `${CURRENT_PARAMETER}_${domainMin}_${domainMax}_${step}_${month}_${resolution}`,
     bins,
   };
 }
@@ -310,7 +386,7 @@ function getResolutionFromZoom(zoom) {
     12: 8,
     13: 8,
     14: 9,
-    15: 9,  
+    15: 9,
   };
 
   for (let z = zoom; z >= 6; z--) {
@@ -318,6 +394,7 @@ function getResolutionFromZoom(zoom) {
       return zoomToResolution[z];
     }
   }
+
   return 5;
 }
 
@@ -374,20 +451,28 @@ function getHexGeometry(hexId) {
   return polygon;
 }
 
-async function loadStations(forceReload = false) {
-  if (stationsCache && !forceReload) return stationsCache;
-
-  try {
-    const response = await fetch(`${API_BASE_URL}/stations/`);
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-    const geojson = await response.json();
-    stationsCache = geojson;
-    return geojson;
-  } catch (error) {
-    console.error("Ошибка при загрузке станций:", error);
+async function loadStationGeoJSON(endpoint, stationIds) {
+  if (!Array.isArray(stationIds) || stationIds.length === 0) {
     return { type: "FeatureCollection", features: [] };
   }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/${endpoint}/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ station_ids: stationIds }),
+    });
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+    return await response.json();
+  } catch (error) {
+    console.error(`Ошибка при загрузке станций ${endpoint}:`, error);
+    return { type: "FeatureCollection", features: [] };
+  }
+}
+
+async function loadStations(stationIds) {
+  return loadStationGeoJSON("stations", stationIds);
 }
 
 async function loadH3Aggregation(day = null, month = 1, year = null, hour = null, resolution = 5, data_val = null) {
@@ -396,6 +481,7 @@ async function loadH3Aggregation(day = null, month = 1, year = null, hour = null
       month,
       year,
       resolution,
+      parameter: CURRENT_PARAMETER,
     };
 
     if (data_val) {
@@ -443,24 +529,8 @@ async function loadH3Aggregation(day = null, month = 1, year = null, hour = null
   }
 }
 
-async function loadSensorStations(forceReload = false) {
-  if (sensorStationsCache && !forceReload) return sensorStationsCache;
-
-  try {
-    const response = await fetch(`${API_BASE_URL}/sensor-stations/`);
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const geojson = await response.json();
-    sensorStationsCache = geojson;
-    return geojson;
-
-  } catch (error) {
-    console.error("Ошибка при загрузке станций sensor.community:", error);
-    return { type: "FeatureCollection", features: [] };
-  }
+async function loadSensorStations(stationIds) {
+  return loadStationGeoJSON("sensor-stations", stationIds);
 }
 
 
@@ -469,13 +539,22 @@ async function loadSensorH3Aggregation(
   month = 1,
   year = 2025,
   hour = null,
-  resolution = 5
+  resolution = 5,
+  data_val = "1"
 ) {
   try {
     const requestBody = {
       year,
       resolution,
+      parameter: CURRENT_PARAMETER,
     };
+
+    const validationLevel = parseInt(data_val || "1", 10);
+    const useValidation = validationLevel > 1;
+
+    if (useValidation) {
+      requestBody.data_val = validationLevel;
+    }
 
     if (month !== null && month !== "" && month !== undefined) {
       requestBody.month = parseInt(month, 10);
@@ -489,7 +568,11 @@ async function loadSensorH3Aggregation(
       }
     }
 
-    const response = await fetch(`${API_BASE_URL}/sensor-stations-h3-aggregation/`, {
+    const endpoint = useValidation
+      ? `${API_BASE_URL}/sensor-stations-valid-h3-aggregation/`
+      : `${API_BASE_URL}/sensor-stations-h3-aggregation/`;
+
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
@@ -522,6 +605,7 @@ const baseLayer = new ol.layer.Tile({
     source: osmSource,
     title: "Базовая карта",
     type: "base",
+    opacity: 0.7,
  });
 
 const stationSource = new ol.source.Vector();
@@ -617,7 +701,7 @@ function addHexagonsToSource(geojsonData, targetSource, options = {}) {
 
   for (const feature of geojsonData.features) {
     const hexId = feature.properties.hex_id;
-    const temp = feature.properties.avg_temperature;
+    const value = feature.properties.avg_value;
     const count = feature.properties.count;
 
     if (!hexId) continue;
@@ -625,14 +709,15 @@ function addHexagonsToSource(geojsonData, targetSource, options = {}) {
     const polygon = getHexGeometry(hexId);
     const olFeature = new ol.Feature({
       geometry: polygon,
-      temperature: temp,
+      value: value,
+      parameter: feature.properties.parameter || CURRENT_PARAMETER,
       count: count,
       hex_id: hexId,
       sourceName,
       secondary,
     });
 
-    olFeature.setStyle(getHexStyle(temp, false, secondary, sourceName));
+    olFeature.setStyle(getHexStyle(value, false, secondary, sourceName));
     targetSource.addFeature(olFeature);
   }
 }
@@ -650,7 +735,8 @@ function addSensorStationsToSource(geojsonData, source) {
 
     feature.set("sensor_id", properties.sensor_id);
     feature.set("location_id", properties.location_id ?? null);
-    feature.set("station_temperature", properties.temperature ?? null);
+    feature.set("station_value", properties.value ?? properties.temperature ?? null);
+    feature.set("station_parameter", properties.parameter || CURRENT_PARAMETER);
     feature.set("station_source", "sensor");
 
     source.addFeature(feature);
@@ -689,16 +775,11 @@ function clearAllLayers() {
 
 async function renderNetatmoTab() {
   hideMapMessage();
-  const cfg = state.netatmo;
+  const cfg = { ...state.netatmo };
   const resolution = getTabResolution("netatmo");
+  const version = ++renderVersion;
 
-  const requests = [];
-
-  if (cfg.showStations) {
-    requests.push(loadStations());
-  }
-
-  requests.push(
+  const [netatmoGeojson, sensorGeojson] = await Promise.all([
     loadH3Aggregation(
       cfg.day,
       cfg.month,
@@ -706,35 +787,20 @@ async function renderNetatmoTab() {
       cfg.hour,
       resolution,
       cfg.dataVal
-    )
-  );
+    ),
+    cfg.includeSensorCommunity
+      ? loadSensorH3Aggregation(
+          cfg.day,
+          cfg.month,
+          cfg.year,
+          cfg.hour,
+          resolution,
+          state.sensor.dataVal
+        )
+      : null,
+  ]);
 
-  if (cfg.includeSensorCommunity) {
-    requests.push(
-      loadSensorH3Aggregation(
-        state.netatmo.day,
-        state.netatmo.month,
-        state.netatmo.year,
-        state.netatmo.hour,
-        resolution
-      )
-    );
-
-    requests.push(loadSensorStations());
-  }
-
-  const results = await Promise.all(requests);
-
-  clearAllLayers();
-
-  let idx = 0;
-
-  if (cfg.showStations) {
-    addStationsToSource(results[idx], stationSource);
-    idx += 1;
-  }
-
-  const netatmoGeojson = results[idx];
+  if (version !== renderVersion) return;
 
   if (!netatmoGeojson.features || netatmoGeojson.features.length === 0) {
     clearAllLayers();
@@ -746,18 +812,24 @@ async function renderNetatmoTab() {
     return;
   }
 
+  // Each point request uses IDs from the aggregation of the same network.
+  const [netatmoStationsGeojson, sensorStationsGeojson] = await Promise.all([
+    cfg.showStations ? loadStations(netatmoGeojson.station_ids) : null,
+    cfg.includeSensorCommunity ? loadSensorStations(sensorGeojson.station_ids) : null,
+  ]);
+
+  if (version !== renderVersion) return;
+
+  clearAllLayers();
+
+  if (cfg.showStations) {
+    addStationsToSource(netatmoStationsGeojson, stationSource);
+  }
+
   const geojsonsForScale = [netatmoGeojson];
 
-  if (cfg.includeSensorCommunity) {
-    const sensorHexGeojsonForScale = results[idx + 1];
-
-    if (
-      sensorHexGeojsonForScale &&
-      Array.isArray(sensorHexGeojsonForScale.features) &&
-      sensorHexGeojsonForScale.features.length > 0
-    ) {
-      geojsonsForScale.push(sensorHexGeojsonForScale);
-    }
+  if (sensorGeojson?.features?.length > 0) {
+    geojsonsForScale.push(sensorGeojson);
   }
 
   updateTemperatureScale(geojsonsForScale, cfg.month, resolution, netatmoLegend);
@@ -766,26 +838,17 @@ async function renderNetatmoTab() {
     sourceName: "netatmo",
     secondary: false,
   });
-  idx += 1;
 
   if (cfg.includeSensorCommunity) {
-    const sensorHexGeojson = results[idx];
-    idx += 1;
-
-    const sensorStationsGeojson = results[idx];
-    idx += 1;
-
-    addHexagonsToSource(sensorHexGeojson, sensorHexSource, {
+    addHexagonsToSource(sensorGeojson, sensorHexSource, {
       sourceName: "sensor",
       secondary: true,
     });
-
     addSensorStationsToSource(sensorStationsGeojson, sensorStationSource);
   }
 
-
   stationLayer.setVisible(cfg.showStations);
-  netatmoHexLayer.setVisible(cfg.showHex);
+  netatmoHexLayer.setVisible(state.netatmo.showHex);
   sensorHexLayer.setVisible(cfg.includeSensorCommunity);
   sensorStationLayer.setVisible(cfg.includeSensorCommunity);
 }
@@ -793,7 +856,7 @@ async function renderNetatmoTab() {
 async function renderSensorTab() {
   hideMapMessage();
 
-  const cfg = state.sensor;
+  const cfg = { ...state.sensor };
   const resolution = getTabResolution("sensor");
 
   if (!validateSensorYear()) return;
@@ -804,43 +867,30 @@ async function renderSensorTab() {
     return;
   }
 
-  const requests = [
+  const version = ++renderVersion;
+
+  const [sensorGeojson, netatmoGeojson] = await Promise.all([
     loadSensorH3Aggregation(
       cfg.day,
       cfg.month,
       cfg.year,
       cfg.hour,
-      resolution
-    )
-  ];
+      resolution,
+      cfg.dataVal
+    ),
+    cfg.includeNetatmo
+      ? loadH3Aggregation(
+          cfg.day,
+          cfg.month,
+          cfg.year,
+          cfg.hour,
+          resolution,
+          state.netatmo.dataVal
+        )
+      : null,
+  ]);
 
-  if (cfg.showStations) {
-    requests.push(loadSensorStations());
-  }
-
-  if (cfg.includeNetatmo) {
-    requests.push(
-      loadH3Aggregation(
-        state.sensor.day,
-        state.sensor.month,
-        state.sensor.year,
-        state.sensor.hour,
-        resolution,
-        state.netatmo.dataVal
-      )
-    );
-
-    requests.push(loadStations());
-  }
-
-  const results = await Promise.all(requests);
-
-  clearAllLayers();
-
-  let idx = 0;
-
-  const sensorGeojson = results[idx];
-  idx += 1;
+  if (version !== renderVersion) return;
 
   if (!sensorGeojson.features || sensorGeojson.features.length === 0) {
     clearAllLayers();
@@ -852,20 +902,19 @@ async function renderSensorTab() {
     return;
   }
 
+  const [sensorStationsGeojson, netatmoStationsGeojson] = await Promise.all([
+    cfg.showStations ? loadSensorStations(sensorGeojson.station_ids) : null,
+    cfg.includeNetatmo ? loadStations(netatmoGeojson.station_ids) : null,
+  ]);
+
+  if (version !== renderVersion) return;
+
+  clearAllLayers();
+
   const geojsonsForScale = [sensorGeojson];
 
-  if (cfg.includeNetatmo) {
-    const netatmoHexGeojsonForScale = cfg.showStations
-      ? results[idx + 1]
-      : results[idx];
-
-    if (
-      netatmoHexGeojsonForScale &&
-      Array.isArray(netatmoHexGeojsonForScale.features) &&
-      netatmoHexGeojsonForScale.features.length > 0
-    ) {
-      geojsonsForScale.push(netatmoHexGeojsonForScale);
-    }
+  if (netatmoGeojson?.features?.length > 0) {
+    geojsonsForScale.push(netatmoGeojson);
   }
 
   updateTemperatureScale(geojsonsForScale, cfg.month, resolution, sensorLegend);
@@ -876,30 +925,19 @@ async function renderSensorTab() {
   });
 
   if (cfg.showStations) {
-    const sensorStationsGeojson = results[idx];
-    idx += 1;
-
     addSensorStationsToSource(sensorStationsGeojson, sensorStationSource);
   }
 
   if (cfg.includeNetatmo) {
-    const netatmoHexGeojson = results[idx];
-    idx += 1;
-
-    const netatmoStationsGeojson = results[idx];
-    idx += 1;
-
-    addHexagonsToSource(netatmoHexGeojson, netatmoHexSource, {
+    addHexagonsToSource(netatmoGeojson, netatmoHexSource, {
       sourceName: "netatmo",
       secondary: true,
     });
-
     addStationsToSource(netatmoStationsGeojson, stationSource);
   }
 
-  sensorHexLayer.setVisible(cfg.showHex);
+  sensorHexLayer.setVisible(state.sensor.showHex);
   sensorStationLayer.setVisible(cfg.showStations);
-
   netatmoHexLayer.setVisible(cfg.includeNetatmo);
   stationLayer.setVisible(cfg.includeNetatmo);
 }
@@ -927,12 +965,12 @@ function activateTab(tabName) {
 function resetPreviousSelection() {
   if (!previouslySelectedFeature) return;
 
-  const prevTemp = previouslySelectedFeature.get("temperature");
+  const prevValue = previouslySelectedFeature.get("value");
   const prevSecondary = previouslySelectedFeature.get("secondary") === true;
   const prevSourceName = previouslySelectedFeature.get("sourceName") || "netatmo";
 
   previouslySelectedFeature.setStyle(
-    getHexStyle(prevTemp, false, prevSecondary, prevSourceName)
+    getHexStyle(prevValue, false, prevSecondary, prevSourceName)
   );
   previouslySelectedFeature = null;
 }
@@ -995,47 +1033,72 @@ map.on("singleclick", function (evt) {
     if (feature.get("station_source") === "sensor") {
       const sensorId = feature.get("sensor_id");
       const locationId = feature.get("location_id");
-      const temperature = feature.get("station_temperature");
+      const stationValue = feature.get("station_value");
+      const stationParameter = feature.get("station_parameter") || CURRENT_PARAMETER;
+
+      const parameterLabels = {
+        temperature: "Температура",
+        humidity: "Влажность",
+        pressure: "Давление",
+      };
+
+      const parameterUnits = {
+        temperature: "°C",
+        humidity: "%",
+        pressure: "гПа",
+      };
+
+      const valueLine =
+        stationValue !== undefined && stationValue !== null
+          ? `<b>${parameterLabels[stationParameter] || "Значение"}:</b> ${Number(stationValue).toFixed(2)} ${parameterUnits[stationParameter] || ""}<br>`
+          : "";
 
       const locationLine =
         locationId !== undefined && locationId !== null
           ? `<b>location_id:</b> ${locationId}<br>`
           : "";
 
-      const temperatureLine =
-        temperature !== undefined && temperature !== null
-          ? `<b>Температура:</b> ${Number(temperature).toFixed(2)} °C<br>`
-          : "";
-
-      content.innerHTML = `
-        <b>Источник:</b> sensor.community<br>
-        <b>sensor_id:</b> ${sensorId}<br>
-        ${locationLine}
-        ${temperatureLine}
-      `;
+    content.innerHTML = `
+      <b>Источник:</b> sensor.community<br>
+      <b>sensor_id:</b> ${sensorId}<br>
+      ${locationLine}
+      ${valueLine}
+    `;
 
       overlay.setPosition(coord);
       return;
     }
 
-  if (feature.get("temperature") !== undefined) {
-    const t = feature.get("temperature").toFixed(2);
-    const count = feature.get("count") || 0;
-    const sourceName = feature.get("sourceName") === "sensor" ? "sensor.community" : "Netatmo";
+    if (feature.get("value") !== undefined) {
+      const value = Number(feature.get("value"));
+      const count = feature.get("count") || 0;
+      const sourceName = feature.get("sourceName") === "sensor" ? "sensor.community" : "Netatmo";
+      const parameter = feature.get("parameter") || CURRENT_PARAMETER;
 
-    content.innerHTML = `
-      <b>Источник:</b> ${sourceName}<br>
-      <b>Средняя температура:</b> ${t} °C<br>
-      <b>Количество измерений:</b> ${count}<br>`;
+      const parameterLabels = {
+        temperature: "Среднее значение температуры",
+        humidity: "Среднее значение влажности",
+        pressure: "Среднее значение давления",
+      };
 
-    const temp = feature.get("temperature");
-    const secondary = feature.get("secondary") === true;
-    const srcName = feature.get("sourceName") || "netatmo";
+      const parameterUnits = {
+        temperature: "°C",
+        humidity: "%",
+        pressure: "гПа",
+      };
 
-    feature.setStyle(getHexStyle(temp, true, secondary, srcName));
-    previouslySelectedFeature = feature;
-    overlay.setPosition(coord);
-  }
+      content.innerHTML = `
+        <b>Источник:</b> ${sourceName}<br>
+        <b>${parameterLabels[parameter] || "Среднее значение"}:</b> ${value.toFixed(2)} ${parameterUnits[parameter] || ""}<br>
+        <b>Количество измерений:</b> ${count}<br>`;
+
+      const secondary = feature.get("secondary") === true;
+      const srcName = feature.get("sourceName") || "netatmo";
+
+      feature.setStyle(getHexStyle(value, true, secondary, srcName));
+      previouslySelectedFeature = feature;
+      overlay.setPosition(coord);
+    }
 });
 
 map.getView().on("change:resolution", function () {
@@ -1078,6 +1141,7 @@ function syncSensorUiFromState() {
   sensorMonthSelect.value = String(state.sensor.month);
   sensorYearInput.value = state.sensor.year ?? "";
   sensorHourSelect.value = state.sensor.hour ?? "";
+  sensorDataValSelect.value = state.sensor.dataVal ?? "1";
 
   sensorLockResolution.checked = state.sensor.locked;
   sensorResolutionSelect.disabled = !state.sensor.locked;
@@ -1094,6 +1158,12 @@ function syncSensorUiFromState() {
   updateSensorHourState();
 }
 
+if (parameterSelect) {
+  CURRENT_PARAMETER = parameterSelect.value || "temperature";
+}
+
+updateValidationUiState();
+updateLegendTitles();
 syncNetatmoUiFromState();
 syncSensorUiFromState();
 
@@ -1122,6 +1192,10 @@ netatmoDataValSelect.addEventListener("change", (e) => {
   state.netatmo.dataVal = e.target.value || null;
 });
 
+sensorDataValSelect.addEventListener("change", (e) => {
+  state.sensor.dataVal = e.target.value || "1";
+});
+
 netatmoLockResolution.addEventListener("change", (e) => {
   state.netatmo.locked = e.target.checked;
   netatmoResolutionSelect.disabled = !state.netatmo.locked;
@@ -1139,6 +1213,7 @@ netatmoToggleStations.addEventListener("change", (e) => {
   state.netatmo.showStations = e.target.checked;
   if (state.activeTab === "netatmo") {
     stationLayer.setVisible(state.netatmo.showStations);
+    renderActiveTab();
   }
 });
 
@@ -1173,6 +1248,7 @@ sensorToggleStations.addEventListener("change", (e) => {
   state.sensor.showStations = e.target.checked;
   if (state.activeTab === "sensor") {
     sensorStationLayer.setVisible(state.sensor.showStations);
+    renderActiveTab();
   }
 });
 
@@ -1255,6 +1331,14 @@ netatmoYearInput.addEventListener("change", (e) => {
   state.netatmo.year = parseInt(value, 10);
   netatmoYearInput.classList.remove("invalid");
   hideMapMessage();
+});
+
+parameterSelect.addEventListener("change", (e) => {
+  CURRENT_PARAMETER = e.target.value || "temperature";
+  updateValidationUiState();
+  updateLegendTitles();
+  hideMapMessage();
+  renderActiveTab();
 });
 
 activateTab("netatmo");
